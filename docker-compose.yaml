@@ -1,0 +1,23 @@
+services:
+  lnd-gotify-notifier:
+    image: lnd_gotify
+    container_name: lnd-gotify
+    user: "1000:1000"
+    restart: always
+    environment:
+      - GOTIFY_URL=${GOTIFY_URL}
+      - GOTIFY_TOKEN=${GOTIFY_TOKEN}
+      - LND_GRPC_HOST=wireguard-lnd:10009
+      - LND_MACAROON_PATH=/lnd/data/chain/bitcoin/mainnet/gotify_notifier.macaroon
+      - LND_TLS_CERT_PATH=/lnd/tls.cert
+    volumes:
+      - /data/lnd/data:/lnd:ro
+    networks:
+      - lnd
+    depends_on:
+      - lnd
+    deploy:
+      resources:
+        limits:
+          cpus: 1
+          memory: 300M
