@@ -92,6 +92,7 @@ python gotify_notifier.py
 | `LND_GRPC_HOST` | LND gRPC host and port | `localhost:10009` | ✅ |
 | `LND_MACAROON_PATH` | Path to LND macaroon file | - | ✅ |
 | `LND_TLS_CERT_PATH` | Path to LND tls.cert file | - | ✅ |
+| `LOGURU_LOG_LEVEL` | Log level (e.g., `DEBUG`, `INFO`, `WARNING`, `ERROR`) | `INFO` | ❌ |
 
 ### Gotify Setup
 

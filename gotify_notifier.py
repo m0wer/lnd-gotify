@@ -26,19 +26,9 @@ import threading
 import time
 import grpc
 import codecs
-import logging
 import signal
 import sys
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Import generated protobuf files
 try:
