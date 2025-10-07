@@ -3,7 +3,7 @@
 Gotify Notifier for LND Events.
 
 This script connects to an LND node and sends notifications for channel
-openings, closings, and settled invoices to a Gotify server.
+openings, closings, settled invoices, and forwards to a Gotify server.
 
 Installation:
     pip install -r requirements.txt
@@ -26,9 +26,19 @@ import threading
 import time
 import grpc
 import codecs
+import logging
 import signal
 import sys
-from loguru import logger
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Import generated protobuf files
 try:
@@ -98,6 +108,16 @@ def get_lnd_stub():
     except Exception as e:
         logger.error(f"Failed to create LND stub: {e}")
         raise
+
+def get_node_alias(pubkey, stub):
+    """Fetches the alias of a node from its public key."""
+    try:
+        request = ln.NodeInfoRequest(pub_key=pubkey)
+        response = stub.GetNodeInfo(request)
+        return response.node.alias
+    except grpc.RpcError as e:
+        logger.error(f"Could not get node info for {pubkey}: {e.details()}")
+        return pubkey
 
 def subscribe_channel_events(stub):
     """Subscribes to channel events and sends notifications."""
@@ -178,36 +198,73 @@ def subscribe_forwards(stub):
     """Subscribes to forwarding events and sends notifications."""
     logger.info("Subscribing to forwarding events...")
     
-    last_forward_time = int(time.time()) # Initialize with current time to avoid old notifications
+    # Track processed forward events to avoid duplicates
+    processed_forwards = set()
+    last_forward_time = int(time.time())
     
     while not shutdown_requested:
         try:
-            # Fetch forwarding history from the last processed time to now
+            # Create a mapping from channel ID to peer pubkey
+            channels = stub.ListChannels(ln.ListChannelsRequest()).channels
+            chan_id_to_pubkey = {chan.chan_id: chan.remote_pubkey for chan in channels}
+            
             current_time = int(time.time())
             request = ln.ForwardingHistoryRequest(
                 start_time=last_forward_time,
                 end_time=current_time,
-                num_max_events=100 # Adjust as needed, or remove for all events
+                num_max_events=100
             )
-            
             response = stub.ForwardingHistory(request)
             
-            # Process new forwards and update last_forward_time
-            for event in response.forwarding_events:
-                title = "⚡ Payment Forwarded"
-                amount_in = event.amt_in
-                amount_out = event.amt_out
-                fee_earned = amount_in - amount_out
-                
-                message = f"Forwarded {amount_out:,} sats\nFee earned: {fee_earned:,} sats"
-                send_gotify_notification(title, message)
-                
-                # Update last_forward_time to the timestamp of the latest processed event + 1
-                # to ensure we don't re-process this event.
-                if event.timestamp > last_forward_time:
-                    last_forward_time = event.timestamp + 1
+            # Process events
+            latest_timestamp = last_forward_time
             
-            # Wait before checking again
+            for event in response.forwarding_events:
+                if shutdown_requested:
+                    break
+                
+                # Create a unique identifier for this forward event
+                event_id = f"{event.timestamp}_{event.chan_id_in}_{event.chan_id_out}_{event.amt_out}_{event.fee_msat}"
+                
+                if event_id in processed_forwards:
+                    continue
+                
+                processed_forwards.add(event_id)
+                
+                # Update latest timestamp
+                if event.timestamp > latest_timestamp:
+                    latest_timestamp = event.timestamp
+                
+                # Get peer aliases
+                in_pubkey = chan_id_to_pubkey.get(event.chan_id_in)
+                out_pubkey = chan_id_to_pubkey.get(event.chan_id_out)
+                
+                in_peer_alias = get_node_alias(in_pubkey, stub) if in_pubkey else f"unknown channel ({event.chan_id_in})"
+                out_peer_alias = get_node_alias(out_pubkey, stub) if out_pubkey else f"unknown channel ({event.chan_id_out})"
+                
+                # Calculate fee and ppm
+                fee_msat = event.fee_msat
+                ppm = (fee_msat * 1_000_000) // event.amt_out_msat if event.amt_out_msat > 0 else 0
+                
+                title = "⚡ Payment Forwarded"
+                message = (
+                    f"Forwarded {event.amt_out:,} sats\n"
+                    f"From: {in_peer_alias}\n"
+                    f"To:   {out_peer_alias}\n"
+                    f"Fee:  {fee_msat} msat ({ppm} ppm)"
+                )
+                send_gotify_notification(title, message)
+            
+            # Update the last_forward_time to avoid reprocessing
+            if latest_timestamp > last_forward_time:
+                last_forward_time = latest_timestamp + 1
+            
+            # Clean up old processed forwards (keep only last 1000)
+            if len(processed_forwards) > 1000:
+                sorted_events = sorted(processed_forwards, key=lambda x: int(x.split('_')[0]))
+                processed_forwards = set(sorted_events[-800:])
+            
+            # Sleep before the next poll
             time.sleep(30)
                 
         except grpc.RpcError as e:
