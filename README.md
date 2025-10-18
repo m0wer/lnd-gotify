@@ -2,6 +2,8 @@
 
 A Python script that connects to your Lightning Network Daemon (LND) node and sends real-time notifications to a Gotify server for important events like channel openings, closings, settled invoices, and payment forwards.
 
+**Use https://github.com/Primexz/lndnotify instead!**
+
 ## Features
 
 - **Real-time notifications** for LND events
